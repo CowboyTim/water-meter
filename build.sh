@@ -9,6 +9,7 @@ function do_update(){
     [ "${DEV_UPDATE:-0}" = 1 ] && {
         arduino-cli --additional-urls "$DEV_URLS" update
         arduino-cli --additional-urls "$DEV_URLS" lib update-index
+        arduino-cli --additional-urls "$DEV_URLS" lib install 'SerialCommands'
         arduino-cli --additional-urls "$DEV_URLS" lib upgrade
         arduino-cli --additional-urls "$DEV_URLS" lib list
         arduino-cli --additional-urls "$DEV_URLS" board list
@@ -34,11 +35,6 @@ function do_build(){
         --output-dir dist \
         --build-property compiler.cpp.extra_flags="$DEV_EXTRA_FLAGS" \
         --build-property compiler.c.extra_flags="$DEV_EXTRA_FLAGS" \
-        --build-property compiler.c.elf.extra_flags="$DEV_EXTRA_FLAGS" \
-        --build-property compiler.S.extra_flags="$DEV_EXTRA_FLAGS" \
-        --build-property compiler.ar.extra_flags="$DEV_EXTRA_FLAGS" \
-        --build-property compiler.objcopy.extra_flags="$DEV_EXTRA_FLAGS" \
-        --build-property compiler.elf2hex.extra_flags="$DEV_EXTRA_FLAGS" \
         --build-property build.partitions=min_spiffs \
         $MODULE \
         || exit $?
