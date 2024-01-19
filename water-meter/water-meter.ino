@@ -44,7 +44,10 @@ typedef wm_cfg wm_cfg_t;
 wm_cfg_t cfg = {0};
 
 /* ntp state */
-uint8_t ntp_is_synced  = 1;
+uint8_t ntp_is_synced      = 1;
+uint8_t logged_wifi_status = 0;
+unsigned int last_cnt      = 0;
+unsigned long last_chg     = 0;
 
 char* at_cmd_check(const char *cmd, const char *at_cmd, unsigned short at_len){
   unsigned short l = strlen(cmd); /* AT+<cmd>=, or AT, or AT+<cmd>? */
@@ -152,10 +155,15 @@ void setup() {
   // EEPROM read
   EEPROM.begin(sizeof(cfg));
   EEPROM.get(0, cfg);
+  // was (or needs) initialized?
   if(cfg.initialized != 72 || cfg.version != CFGVERSION){
+    // clear
     memset(&cfg, 0, sizeof(cfg));
+    // reinit
     cfg.initialized = 72;
+    cfg.version     = CFGVERSION;
     strcpy((char *)&cfg.ntp_host, (char *)DEFAULT_NTP_SERVER);
+    // write
     EEPROM.put(0, cfg);
     EEPROM.commit();
   }
@@ -200,6 +208,7 @@ void setup() {
   Serial.println(d_outstr);
   #endif
 
+  // led to show status
   pinMode(LED, OUTPUT);
 }
  
@@ -207,14 +216,31 @@ void loop() {
   // any new AT command? on USB uart
   ATSc.ReadSerial();
 
-  digitalWrite(LED, HIGH);
-  delay(500);
-  digitalWrite(LED, LOW);
-  delay(500);
+  // led status change based on counter change?
+  if(last_cnt != cfg.cnt){
+    digitalWrite(LED, HIGH);
+    digitalWrite(LED, LOW);
+    last_cnt = cfg.cnt;
+    last_chg = millis();
+  } else {
+    if(millis() - last_chg > 10)
+      digitalWrite(LED, HIGH);
+  }
+
+  // just wifi check
+  if(WiFi.status() == WL_CONNECTED){
+    if(!logged_wifi_status){
+      #ifdef VERBOSE
+      Serial.print(F("WiFi connected: "));
+      Serial.println(WiFi.localIP());
+      #endif
+      logged_wifi_status = 1;
+    }
+  }
 }
 
 void setup_wifi(){
-  // are we connected to WiFi?
+  // are we connecting to WiFi?
   if(strlen(cfg.wifi_ssid) == 0 || strlen(cfg.wifi_pass) == 0)
     return;
   if(WiFi.status() == WL_CONNECTED)
@@ -227,25 +253,4 @@ void setup_wifi(){
   #endif
   WiFi.persistent(false);
   WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
-  int c = 0;
-  while(WiFi.status() != WL_CONNECTED){
-    doYIELD;
-    ATSc.ReadSerial();
-    delay(1000);
-    #ifdef VERBOSE
-    Serial.print(".");
-    #endif
-    if(c++>(cfg.wifi_timeout|60))
-      break;
-  }
-  #ifdef VERBOSE
-  Serial.println("");
-  if(WiFi.status() == WL_CONNECTED){
-    Serial.print(F("WiFi connected: "));
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.print(F("WiFi not connected"));
-    WiFi.disconnect();
-  }
-  #endif
 }
