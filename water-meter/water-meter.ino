@@ -5,6 +5,7 @@
 #ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WiFi.h>
 #endif
+#include <errno.h>
 #include "time.h"
 #include "SerialCommands.h"
 #include "EEPROM.h"
@@ -36,7 +37,7 @@
 char atscbu[128] = {""};
 SerialCommands ATSc(&Serial, atscbu, sizeof(atscbu), "\r\n", "\r\n");
 
-#define CFGVERSION 0x01
+#define CFGVERSION 0x02
 #define CFGINIT    0x72
 
 /* main config */
@@ -51,6 +52,7 @@ struct wm_cfg {
   uint8_t do_debug   = 0;
   uint8_t do_verbose = 0;
   uint8_t do_log     = 0;
+  double rate_change = 0;
 };
 typedef wm_cfg wm_cfg_t;
 wm_cfg_t cfg = {0};
@@ -59,8 +61,12 @@ wm_cfg_t cfg = {0};
 uint8_t ntp_is_synced      = 1;
 uint8_t logged_wifi_status = 0;
 unsigned int last_cnt      = 0;
+unsigned int last_log_value= 0;
 unsigned long last_chg     = 0;
 unsigned int v = 0, last_v = 0;
+unsigned long last_log_time= 0;
+unsigned long nw           = 0;
+double rate = 0.0;
 
 char* at_cmd_check(const char *cmd, const char *at_cmd, unsigned short at_len){
   unsigned short l = strlen(cmd); /* AT+<cmd>=, or AT, or AT+<cmd>? */
@@ -183,6 +189,21 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+LOG_CNT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_log);
+  } else if(p = at_cmd_check("AT+RATE_FACTOR=", atcmdline, cmd_len)){
+    errno = 0;
+    double r = (double)strtod(p, NULL);
+    if(errno != 0){
+      s->GetSerial()->println(F("invalid double"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    if(r != cfg.rate_change){
+      cfg.rate_change = r;
+      EEPROM.put(0, cfg);
+      EEPROM.commit();
+    }
+  } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.rate_change);
   } else if(p = at_cmd_check("AT+ERASE", atcmdline, cmd_len)){
     memset(&cfg, 0, sizeof(cfg));
     EEPROM.put(0, cfg);
@@ -210,6 +231,7 @@ void setup() {
     cfg.initialized = CFGINIT;
     cfg.version     = CFGVERSION;
     cfg.do_log      = 1;
+    cfg.rate_change = 0.1;
     strcpy((char *)&cfg.ntp_host, (char *)DEFAULT_NTP_SERVER);
     // write
     EEPROM.put(0, cfg);
@@ -293,15 +315,28 @@ void loop() {
   if(last_cnt != cfg.cnt){
     digitalWrite(LED, HIGH);
     digitalWrite(LED, LOW);
-    if(cfg.do_log){
-      Serial.print("CNT,");
-      Serial.println(cfg.cnt);
-    }
     last_cnt = cfg.cnt;
     last_chg = millis();
   } else {
     if(millis() - last_chg > 10)
       digitalWrite(LED, HIGH);
+  }
+
+  // last log check
+  if(cfg.do_log){
+    nw = millis();
+    if(nw - 1000 > last_log_time){
+      if(last_log_value != 0 && last_log_time != 0){
+        rate = cfg.rate_change*(double)(last_cnt-last_log_value)/(double)(nw-last_log_time);
+      } else {
+        rate = 0.0;
+      }
+      char b[50] = {0};
+      int h_strl = snprintf((char *)&b, 50, "C,%d\r\nR,%0.04f\r\n", last_cnt, rate);
+      Serial.print(b);
+      last_log_value = last_cnt;
+      last_log_time  = nw;
+    }
   }
 
   // just wifi check
