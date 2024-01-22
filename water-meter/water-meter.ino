@@ -10,7 +10,8 @@
 #include "EEPROM.h"
 #include "sntp.h"
 
-#define LED        2
+#define LED           2
+#define QRD1114_PIN  A0
 
 /* NTP server to use, can be configured later on via AT commands */
 #ifndef DEFAULT_NTP_SERVER
@@ -210,6 +211,9 @@ void setup() {
 
   // led to show status
   pinMode(LED, OUTPUT);
+
+  // QRD1114 PIN set as INPUT
+  pinMode(QRD1114_PIN, INPUT);
 }
  
 void loop() {

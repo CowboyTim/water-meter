@@ -2,7 +2,7 @@
 
 MODULE=${MODULE:-water-meter}
 DEV_BOARD=${DEV_BOARD:-esp8266:esp8266:generic}
-DEV_PORT=${DEV_PORT:-/dev/ttyUSB1}
+DEV_PORT=${DEV_PORT:-/dev/ttyUSB0}
 
 function do_update(){
     DEV_URLS=${DEV_URLS:-http://arduino.esp8266.com/stable/package_esp8266com_index.json}
