@@ -6,6 +6,7 @@
 #include <ESP8266WiFi.h>
 #endif
 #include <errno.h>
+#include <WiFiUdp.h>
 #include "time.h"
 #include "SerialCommands.h"
 #include "EEPROM.h"
@@ -37,7 +38,7 @@
 char atscbu[128] = {""};
 SerialCommands ATSc(&Serial, atscbu, sizeof(atscbu), "\r\n", "\r\n");
 
-#define CFGVERSION 0x02
+#define CFGVERSION 0x01
 #define CFGINIT    0x72
 
 /* main config */
@@ -53,6 +54,8 @@ struct wm_cfg {
   uint8_t do_verbose = 0;
   uint8_t do_log     = 0;
   double rate_change = 0;
+  int udp_port       = 0;
+  char udp_host_ip[16] = {0};
 };
 typedef wm_cfg wm_cfg_t;
 wm_cfg_t cfg = {0};
@@ -66,7 +69,13 @@ unsigned long last_chg     = 0;
 unsigned int v = 0, last_v = 0;
 unsigned long last_log_time= 0;
 unsigned long nw           = 0;
+unsigned long last_wifi_check = 0;
 double rate = 0.0;
+
+// for output to a remote server
+WiFiUDP udp;
+IPAddress udp_tgt;
+uint8_t valid_udp_host = 0;
 
 char* at_cmd_check(const char *cmd, const char *at_cmd, unsigned short at_len){
   unsigned short l = strlen(cmd); /* AT+<cmd>=, or AT, or AT+<cmd>? */
@@ -96,6 +105,7 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.commit();
     WiFi.disconnect();
     setup_wifi();
+    setup_udp();
     configTime(0, 0, (char *)&cfg.ntp_host);
   } else if(p = at_cmd_check("AT+WIFI_SSID?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.wifi_ssid);
@@ -106,6 +116,7 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.commit();
     WiFi.disconnect();
     setup_wifi();
+    setup_udp();
     configTime(0, 0, (char *)&cfg.ntp_host);
   #ifdef DEBUG
   } else if(p = at_cmd_check("AT+WIFI_PASS?", atcmdline, cmd_len)){
@@ -202,6 +213,26 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       EEPROM.put(0, cfg);
       EEPROM.commit();
     }
+  } else if(p = at_cmd_check("AT+UDP_PORT?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.udp_port);
+  } else if(p = at_cmd_check("AT+UDP_HOST_IP?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.udp_host_ip);
+  } else if(p = at_cmd_check("AT+UDP_PORT=", atcmdline, cmd_len)){
+    cfg.udp_port = strtol(p, NULL, 10);
+    EEPROM.put(0, cfg);
+    EEPROM.commit();
+    setup_udp();
+  } else if(p = at_cmd_check("AT+UDP_HOST_IP=", atcmdline, cmd_len)){
+    IPAddress tst;
+    if(!tst.fromString(p)){
+      s->GetSerial()->println(F("invalid udp host IP"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    strcpy(cfg.udp_host_ip, p);
+    EEPROM.put(0, cfg);
+    EEPROM.commit();
+    setup_udp();
   } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.rate_change);
   } else if(p = at_cmd_check("AT+ERASE", atcmdline, cmd_len)){
@@ -237,6 +268,10 @@ void setup() {
     EEPROM.put(0, cfg);
     EEPROM.commit();
   }
+
+  // tgt UDP setup
+  setup_udp();
+
   #ifdef VERBOSE
   if(cfg.do_verbose){
     if(strlen(cfg.wifi_ssid) && strlen(cfg.wifi_pass)){
@@ -323,32 +358,47 @@ void loop() {
   }
 
   // last log check
-  if(cfg.do_log){
-    nw = millis();
-    if(nw - 1000 > last_log_time){
-      if(last_log_value != 0 && last_log_time != 0){
-        rate = cfg.rate_change*(double)(last_cnt-last_log_value)/(double)(nw-last_log_time);
-      } else {
-        rate = 0.0;
-      }
-      char b[50] = {0};
-      int h_strl = snprintf((char *)&b, 50, "C,%d\r\nR,%0.04f\r\n", last_cnt, rate);
+  nw = millis();
+  if(nw - 1000 > last_log_time){
+    if(last_log_value != 0 && last_log_time != 0){
+      rate = cfg.rate_change*(double)(last_cnt-last_log_value)/(double)(nw-last_log_time);
+    } else {
+      rate = 0.0;
+    }
+    last_log_value = last_cnt;
+    last_log_time  = nw;
+
+    char b[50] = {0};
+    int h_strl = snprintf((char *)&b, 50, "C,%d\r\nR,%0.04f\r\n", last_cnt, rate);
+
+    // output over UART?
+    if(cfg.do_log)
       Serial.print(b);
-      last_log_value = last_cnt;
-      last_log_time  = nw;
+
+    // output over UDP?
+    if(valid_udp_host){
+      udp.beginPacket(udp_tgt, cfg.udp_port);
+      udp.write(b, h_strl);
+      udp.endPacket();
     }
   }
 
   // just wifi check
-  if(WiFi.status() == WL_CONNECTED){
-    if(!logged_wifi_status){
-      #ifdef VERBOSE
-      if(cfg.do_verbose){
-        Serial.print(F("WiFi connected: "));
-        Serial.println(WiFi.localIP());
+  if(millis() - last_wifi_check > 500){
+    if(WiFi.status() == WL_CONNECTED){
+      if(!logged_wifi_status){
+        #ifdef VERBOSE
+        if(cfg.do_verbose){
+          Serial.print(F("WiFi connected: "));
+          Serial.println(WiFi.localIP());
+        }
+        #endif
+        logged_wifi_status = 1;
       }
-      #endif
-      logged_wifi_status = 1;
+      if(!valid_udp_host)
+        setup_udp();
+    } else {
+      valid_udp_host = 0;
     }
   }
 }
@@ -369,4 +419,26 @@ void setup_wifi(){
   #endif
   WiFi.persistent(false);
   WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
+}
+
+void setup_udp(){
+  if(udp_tgt.fromString(cfg.udp_host_ip) && cfg.udp_port > 0){
+    valid_udp_host = 1;
+    #ifdef VERBOSE
+    if(cfg.do_verbose){
+      Serial.print(F("send counters to "));
+      Serial.print(cfg.udp_host_ip);
+      Serial.print(F(":"));
+      Serial.println(cfg.udp_port);
+    }
+    #endif
+  } else {
+    valid_udp_host = 0;
+    #ifdef VERBOSE
+    if(cfg.do_verbose){
+      Serial.print(F("udp target host/port is not valid"));
+      Serial.println(cfg.udp_host_ip);
+    }
+    #endif
+  }
 }
