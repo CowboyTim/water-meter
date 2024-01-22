@@ -38,44 +38,55 @@
 char atscbu[128] = {""};
 SerialCommands ATSc(&Serial, atscbu, sizeof(atscbu), "\r\n", "\r\n");
 
-#define CFGVERSION 0x01
-#define CFGINIT    0x72
+#define CFGVERSION 0x01 // switch between 0x01/0x02 to reinit the config struct change
+#define CFGINIT    0x72 // at boot init check flag
+#define CFG_EEPROM 0x00 
 
 /* main config */
 struct wm_cfg {
-  byte initialized   = 0;
-  byte version       = 0;
-  char wifi_ssid[32] = {0};   // max 31 + 1
-  char wifi_pass[64] = {0};   // nax 63 + 1
-  char ntp_host[64]  = {0};   // max hostname + 1
-  unsigned int cnt   = 0;
-  unsigned short wifi_timeout = 0;
-  uint8_t do_debug   = 0;
-  uint8_t do_verbose = 0;
-  uint8_t do_log     = 0;
-  double rate_change = 0;
-  int udp_port       = 0;
+  uint8_t initialized  = 0;
+  uint8_t version      = 0;
+  uint8_t do_debug     = 0;
+  uint8_t do_verbose   = 0;
+  uint8_t do_log       = 0;
+  double rate_adjust   = 0;
+  short udp_port       = 0;
   char udp_host_ip[16] = {0};
+  unsigned int log_interval = 0;
+  char wifi_ssid[32]   = {0};   // max 31 + 1
+  char wifi_pass[64]   = {0};   // nax 63 + 1
+  char ntp_host[64]    = {0};   // max hostname + 1
 };
 typedef wm_cfg wm_cfg_t;
 wm_cfg_t cfg = {0};
 
-/* ntp state */
+/* our main counter values in memory */
+struct cnt_state {
+  uint32_t current_counter = 0;
+  uint32_t last_cnt        = 0;
+};
+typedef cnt_state cnt_state_t;
+cnt_state_t counter;
+double rate = 0.0;
+
+/* state flags */
 uint8_t ntp_is_synced      = 1;
 uint8_t logged_wifi_status = 0;
-unsigned int last_cnt      = 0;
 unsigned int last_log_value= 0;
+unsigned int last_saved_v  = 0;
 unsigned long last_chg     = 0;
 unsigned int v = 0, last_v = 0;
 unsigned long last_log_time= 0;
+unsigned long last_saved_t = 0;
 unsigned long nw           = 0;
 unsigned long last_wifi_check = 0;
-double rate = 0.0;
 
 // for output to a remote server
 WiFiUDP udp;
 IPAddress udp_tgt;
 uint8_t valid_udp_host = 0;
+
+void(* resetFunc)(void) = 0;
 
 char* at_cmd_check(const char *cmd, const char *at_cmd, unsigned short at_len){
   unsigned short l = strlen(cmd); /* AT+<cmd>=, or AT, or AT+<cmd>? */
@@ -100,8 +111,14 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
   #endif
   if(cmd_len == 2 && (p = at_cmd_check("AT", atcmdline, cmd_len))){
   } else if(p = at_cmd_check("AT+WIFI_SSID=", atcmdline, cmd_len)){
-    strncpy((char *)&cfg.wifi_ssid, p, (atcmdline+cmd_len)-p+1);
-    EEPROM.put(0, cfg);
+    size_t sz = (atcmdline+cmd_len)-p+1;
+    if(sz > 31){
+      s->GetSerial()->println(F("WiFI SSID max 31 chars"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    strncpy((char *)&cfg.wifi_ssid, p, sz);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     WiFi.disconnect();
     setup_wifi();
@@ -111,8 +128,14 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     s->GetSerial()->println(cfg.wifi_ssid);
     return;
   } else if(p = at_cmd_check("AT+WIFI_PASS=", atcmdline, cmd_len)){
-    strncpy((char *)&cfg.wifi_pass, p, (atcmdline+cmd_len)-p+1);
-    EEPROM.put(0, cfg);
+    size_t sz = (atcmdline+cmd_len)-p+1;
+    if(sz > 63){
+      s->GetSerial()->println(F("WiFI password max 63 chars"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    strncpy((char *)&cfg.wifi_pass, p, sz);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     WiFi.disconnect();
     setup_wifi();
@@ -148,8 +171,14 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     }
     return;
   } else if(p = at_cmd_check("AT+NTP_HOST=", atcmdline, cmd_len)){
-    strncpy((char *)&cfg.ntp_host, p, (atcmdline+cmd_len)-p+1);
-    EEPROM.put(0, cfg);
+    size_t sz = (atcmdline+cmd_len)-p+1;
+    if(sz > 63){
+      s->GetSerial()->println(F("NTP hostname max 63 chars"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    strncpy((char *)&cfg.ntp_host, p, sz);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     setup_wifi();
     configTime(0, 0, (char *)&cfg.ntp_host);
@@ -163,17 +192,17 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       s->GetSerial()->println(F("not ntp synced"));
     return;
   } else if(p = at_cmd_check("AT+CNT=", atcmdline, cmd_len)){
-    cfg.cnt = strtol(p, NULL, 10);
+    counter.current_counter = strtoul(p, NULL, 10);
   } else if(p = at_cmd_check("AT+CNT?", atcmdline, cmd_len)){
-    s->GetSerial()->println(cfg.cnt);
+    s->GetSerial()->println(counter.current_counter);
   #ifdef DEBUG
   } else if(p = at_cmd_check("AT+DEBUG=1", atcmdline, cmd_len)){
     cfg.do_debug = 1;
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+DEBUG=0", atcmdline, cmd_len)){
     cfg.do_debug = 0;
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+DEBUG?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_debug);
@@ -181,22 +210,22 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
   #ifdef VERBOSE
   } else if(p = at_cmd_check("AT+VERBOSE=1", atcmdline, cmd_len)){
     cfg.do_verbose = 1;
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+VERBOSE=0", atcmdline, cmd_len)){
     cfg.do_verbose = 0;
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+VERBOSE?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_verbose);
   #endif
   } else if(p = at_cmd_check("AT+LOG_CNT=1", atcmdline, cmd_len)){
     cfg.do_log = 1;
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+LOG_CNT=0", atcmdline, cmd_len)){
     cfg.do_log = 0;
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+LOG_CNT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_log);
@@ -208,20 +237,20 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       s->GetSerial()->println(F("ERROR"));
       return;
     }
-    if(r != cfg.rate_change){
-      cfg.rate_change = r;
-      EEPROM.put(0, cfg);
+    if(r != cfg.rate_adjust){
+      cfg.rate_adjust = r;
+      EEPROM.put(CFG_EEPROM, cfg);
       EEPROM.commit();
     }
   } else if(p = at_cmd_check("AT+UDP_PORT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.udp_port);
-  } else if(p = at_cmd_check("AT+UDP_HOST_IP?", atcmdline, cmd_len)){
-    s->GetSerial()->println(cfg.udp_host_ip);
   } else if(p = at_cmd_check("AT+UDP_PORT=", atcmdline, cmd_len)){
     cfg.udp_port = strtol(p, NULL, 10);
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     setup_udp();
+  } else if(p = at_cmd_check("AT+UDP_HOST_IP?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.udp_host_ip);
   } else if(p = at_cmd_check("AT+UDP_HOST_IP=", atcmdline, cmd_len)){
     IPAddress tst;
     if(!tst.fromString(p)){
@@ -230,15 +259,22 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       return;
     }
     strcpy(cfg.udp_host_ip, p);
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     setup_udp();
   } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
-    s->GetSerial()->println(cfg.rate_change);
+    s->GetSerial()->println(cfg.rate_adjust);
   } else if(p = at_cmd_check("AT+ERASE", atcmdline, cmd_len)){
     memset(&cfg, 0, sizeof(cfg));
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
+    memset(&counter, 0, sizeof(counter));
+    EEPROM.put(CFG_EEPROM+sizeof(counter), counter);
+    EEPROM.commit();
+  } else if(p = at_cmd_check("AT+RESET", atcmdline, cmd_len)){
+    s->GetSerial()->println(F("OK"));
+    resetFunc();
+    return;
   } else {
     s->GetSerial()->println(F("ERROR"));
     return;
@@ -248,12 +284,12 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
 }
 
 void setup() {
-  // Serial setup/debug
-  Serial.begin(115200);
+  // Serial setup, init at 115200 8N1
+  Serial.begin(115200, SERIAL_8N1);
 
   // EEPROM read
-  EEPROM.begin(sizeof(cfg));
-  EEPROM.get(0, cfg);
+  EEPROM.begin(sizeof(cfg)+sizeof(counter));
+  EEPROM.get(CFG_EEPROM, cfg);
   // was (or needs) initialized?
   if(cfg.initialized != CFGINIT || cfg.version != CFGVERSION){
     // clear
@@ -262,15 +298,29 @@ void setup() {
     cfg.initialized = CFGINIT;
     cfg.version     = CFGVERSION;
     cfg.do_log      = 1;
-    cfg.rate_change = 0.1;
+    cfg.log_interval= 1000;
+    cfg.rate_adjust = 1.0;
     strcpy((char *)&cfg.ntp_host, (char *)DEFAULT_NTP_SERVER);
     // write
-    EEPROM.put(0, cfg);
+    EEPROM.put(CFG_EEPROM, cfg);
+    // write empty counter
+    memset(&counter, 0, sizeof(counter));
+    EEPROM.put(CFG_EEPROM+sizeof(cfg), counter);
     EEPROM.commit();
   }
 
+  // read in counter state
+  EEPROM.get(CFG_EEPROM+sizeof(cfg), counter);
+
   // tgt UDP setup
   setup_udp();
+
+  #ifdef VERBOSE
+  if(cfg.do_verbose){
+    Serial.print(F("eeprom size: "));
+    Serial.println(EEPROM.length());
+  }
+  #endif
 
   #ifdef VERBOSE
   if(cfg.do_verbose){
@@ -342,34 +392,34 @@ void loop() {
     }
     #endif
     if(v < last_v)
-      cfg.cnt++;
+      counter.current_counter++;
     last_v = v;
   }
 
   // led status change based on counter change?
-  if(last_cnt != cfg.cnt){
-    digitalWrite(LED, HIGH);
+  if(counter.last_cnt != counter.current_counter){
     digitalWrite(LED, LOW);
-    last_cnt = cfg.cnt;
+    digitalWrite(LED, HIGH);
+    counter.last_cnt = counter.current_counter;
     last_chg = millis();
   } else {
-    if(millis() - last_chg > 10)
-      digitalWrite(LED, HIGH);
+    if(millis() - last_chg > 30)
+      digitalWrite(LED, LOW);
   }
 
   // last log check
   nw = millis();
-  if(nw - 1000 > last_log_time){
+  if(nw - cfg.log_interval > last_log_time){
     if(last_log_value != 0 && last_log_time != 0){
-      rate = cfg.rate_change*(double)(last_cnt-last_log_value)/(double)(nw-last_log_time);
+      rate = cfg.rate_adjust*(double)(counter.last_cnt-last_log_value)/(double)(nw-last_log_time);
     } else {
       rate = 0.0;
     }
-    last_log_value = last_cnt;
+    last_log_value = counter.last_cnt;
     last_log_time  = nw;
 
     char b[50] = {0};
-    int h_strl = snprintf((char *)&b, 50, "C,%d\r\nR,%0.04f\r\n", last_cnt, rate);
+    int h_strl = snprintf((char *)&b, 50, "C,%d\r\nR,%0.04f\r\n", counter.last_cnt, rate);
 
     // output over UART?
     if(cfg.do_log)
@@ -381,6 +431,20 @@ void loop() {
       udp.write(b, h_strl);
       udp.endPacket();
     }
+  }
+
+  // save to EEPROM?
+  if(millis() - last_saved_t > 10000){
+    if(last_saved_v != last_log_value){
+      #ifdef DEBUG
+      if(cfg.do_debug)
+        Serial.println(F("EEPROM save"));
+      #endif
+      last_saved_v = last_log_value;
+      EEPROM.put(CFG_EEPROM+sizeof(cfg), counter);
+      EEPROM.commit();
+    }
+    last_saved_t = millis();
   }
 
   // just wifi check
