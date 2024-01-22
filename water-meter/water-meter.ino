@@ -11,7 +11,7 @@
 #include "sntp.h"
 
 #define LED           2
-#define QRD1114_PIN  A0
+#define QRD1114_PIN   0
 
 /* NTP server to use, can be configured later on via AT commands */
 #ifndef DEFAULT_NTP_SERVER
@@ -49,6 +49,10 @@ uint8_t ntp_is_synced      = 1;
 uint8_t logged_wifi_status = 0;
 unsigned int last_cnt      = 0;
 unsigned long last_chg     = 0;
+unsigned int v = 0, last_v = 0;
+#ifdef DEBUG
+uint8_t do_debug           = 1;
+#endif
 
 char* at_cmd_check(const char *cmd, const char *at_cmd, unsigned short at_len){
   unsigned short l = strlen(cmd); /* AT+<cmd>=, or AT, or AT+<cmd>? */
@@ -137,6 +141,14 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     cfg.cnt = strtol(p, NULL, 10);
   } else if(p = at_cmd_check("AT+CNT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.cnt);
+  #ifdef DEBUG
+  } else if(p = at_cmd_check("AT+DEBUG=1", atcmdline, cmd_len)){
+    do_debug = 1;
+  } else if(p = at_cmd_check("AT+DEBUG=0", atcmdline, cmd_len)){
+    do_debug = 0;
+  } else if(p = at_cmd_check("AT+DEBUG?", atcmdline, cmd_len)){
+    s->GetSerial()->println(do_debug);
+  #endif
   } else if(p = at_cmd_check("AT+ERASE", atcmdline, cmd_len)){
     memset(&cfg, 0, sizeof(cfg));
     EEPROM.put(0, cfg);
@@ -220,10 +232,30 @@ void loop() {
   // any new AT command? on USB uart
   ATSc.ReadSerial();
 
+  // check PIN value
+  v = digitalRead(QRD1114_PIN);
+  if(v != last_v){
+    #ifdef DEBUG
+    if(do_debug){
+      Serial.print(F("V: "));
+      Serial.print(v);
+      Serial.print(F(", LAST_V: "));
+      Serial.println(last_v);
+    }
+    #endif
+    if(v < last_v)
+      cfg.cnt++;
+    last_v = v;
+  }
+
   // led status change based on counter change?
   if(last_cnt != cfg.cnt){
     digitalWrite(LED, HIGH);
     digitalWrite(LED, LOW);
+    #ifdef DEBUG
+    if(do_debug)
+      Serial.println(cfg.cnt);
+    #endif
     last_cnt = cfg.cnt;
     last_chg = millis();
   } else {
