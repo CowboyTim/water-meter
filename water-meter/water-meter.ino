@@ -250,6 +250,36 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       EEPROM.put(CFG_EEPROM, cfg);
       EEPROM.commit();
     }
+  } else if(p = at_cmd_check("AT+LOG1_INTERVAL?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.log_interval_1s);
+  } else if(p = at_cmd_check("AT+LOG1_INTERVAL=", atcmdline, cmd_len)){
+    errno = 0;
+    unsigned int l_int = (double)strtoul(p, NULL, 10);
+    if(errno != 0){
+      s->GetSerial()->println(F("invalid integer"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    if(l_int != cfg.log_interval_1s){
+      cfg.log_interval_1s = l_int;
+      EEPROM.put(CFG_EEPROM, cfg);
+      EEPROM.commit();
+    }
+  } else if(p = at_cmd_check("AT+LOG2_INTERVAL?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.log_interval_5m);
+  } else if(p = at_cmd_check("AT+LOG2_INTERVAL=", atcmdline, cmd_len)){
+    errno = 0;
+    unsigned int l_int = (double)strtoul(p, NULL, 10);
+    if(errno != 0){
+      s->GetSerial()->println(F("invalid integer"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    if(l_int != cfg.log_interval_5m){
+      cfg.log_interval_5m = l_int;
+      EEPROM.put(CFG_EEPROM, cfg);
+      EEPROM.commit();
+    }
   } else if(p = at_cmd_check("AT+UDP_PORT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.udp_port);
   } else if(p = at_cmd_check("AT+UDP_PORT=", atcmdline, cmd_len)){
@@ -431,7 +461,7 @@ void loop() {
     last_log_time_1s  = nw;
 
     memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%0.08f\r\nR1S,%0.08f\r\n", cfg.rate_adjust*last_log_value_1s, rate);
+    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%0.08f\r\nR1,%0.08f\r\n", cfg.rate_adjust*last_log_value_1s, rate);
 
     // output over UART?
     if(cfg.do_log)
@@ -459,7 +489,7 @@ void loop() {
     last_log_time_5m    = nw;
 
     memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R5M,%0.08f\r\n", rate);
+    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R2,%0.08f\r\n", rate);
 
     // output over UART?
     if(cfg.do_log)
