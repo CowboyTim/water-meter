@@ -63,9 +63,9 @@ typedef wm_cfg wm_cfg_t;
 wm_cfg_t cfg = {0};
 
 /* our main counter values in memory */
+uint32_t last_cnt = 0;
 struct cnt_state {
   uint32_t current_counter = 0;
-  uint32_t last_cnt        = 0;
 };
 typedef cnt_state cnt_state_t;
 cnt_state_t counter;
@@ -461,10 +461,10 @@ void loop() {
   }
 
   // led status change based on counter change?
-  if(counter.last_cnt != counter.current_counter){
+  if(last_cnt != counter.current_counter){
     digitalWrite(LED, LOW);
     digitalWrite(LED, HIGH);
-    counter.last_cnt = counter.current_counter;
+    last_cnt = counter.current_counter;
     last_chg = millis();
   } else {
     if(millis() - last_chg > 30)
@@ -474,18 +474,18 @@ void loop() {
   // last log check TIMER/RATE 1
   if(millis() - last_log_time_1s > cfg.log_interval_1s){
     if(last_log_time_1s == 0){
-      last_log_value_1s = counter.last_cnt;
+      last_log_value_1s = counter.current_counter;
       last_log_time_1s  = millis();
     } else {
       if(last_log_value_1s != 0){
         // 1000* as this is in millis()
         // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
         // 1 tick is 1dl, so counter is in x DeciLiter, so we do rate_adjust* for CNT too
-        rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_1s)/(double)(millis()-last_log_time_1s);
+        rate = 1000*cfg.rate_adjust*(double)(counter.current_counter-last_log_value_1s)/(double)(millis()-last_log_time_1s);
       } else {
         rate = 0.0;
       }
-      last_log_value_1s = counter.last_cnt;
+      last_log_value_1s = counter.current_counter;
       last_log_time_1s  = millis();
 
       memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
@@ -507,17 +507,17 @@ void loop() {
   // last log check TIMER/RATE 2
   if(millis() - last_log_time_5m > cfg.log_interval_5m){
     if(last_log_value_5m == 0){
-      last_log_value_5m   = counter.last_cnt;
+      last_log_value_5m   = counter.current_counter;
       last_log_time_5m    = millis();
     } else {
       // 1000* as this is in millis()
       // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
       if(last_log_value_5m != 0){
-        rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_5m)/(double)(millis()-last_log_time_5m);
+        rate = 1000*cfg.rate_adjust*(double)(counter.current_counter-last_log_value_5m)/(double)(millis()-last_log_time_5m);
       } else {
         rate = 0.0;
       }
-      last_log_value_5m   = counter.last_cnt;
+      last_log_value_5m   = counter.current_counter;
       last_log_time_5m    = millis();
 
       memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
