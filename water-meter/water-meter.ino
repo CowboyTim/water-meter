@@ -198,7 +198,21 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       s->GetSerial()->println(F("not ntp synced"));
     return;
   } else if(p = at_cmd_check("AT+CNT=", atcmdline, cmd_len)){
-    counter.current_counter = strtoul(p, NULL, 10);
+    errno = 0;
+    unsigned int new_c = (unsigned int)floor(((double)strtod(p, NULL))/cfg.rate_adjust);
+    if(errno != 0){
+      s->GetSerial()->println(F("invalid double"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    if(new_c != counter.current_counter){
+      counter.current_counter = new_c;
+      // disable next rate calculation, it'll be pointless
+      last_log_time_1s  = 0;
+      last_log_value_1s = 0;
+      last_log_time_5m  = 0;
+      last_log_value_5m = 0;
+    }
   } else if(p = at_cmd_check("AT+CNT?", atcmdline, cmd_len)){
     s->GetSerial()->println(counter.current_counter);
   #ifdef DEBUG
