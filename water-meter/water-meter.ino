@@ -199,7 +199,7 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     return;
   } else if(p = at_cmd_check("AT+CNT=", atcmdline, cmd_len)){
     errno = 0;
-    unsigned int new_c = (unsigned int)floor(((double)strtod(p, NULL))/cfg.rate_adjust);
+    unsigned int new_c = strtoul(p, NULL, 10);
     if(errno != 0){
       s->GetSerial()->println(F("invalid double"));
       s->GetSerial()->println(F("ERROR"));
