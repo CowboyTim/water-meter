@@ -82,7 +82,6 @@ unsigned int v = 0, last_v = 0;
 unsigned long last_log_time_1s = 0;
 unsigned long last_log_time_5m = 0;
 unsigned long last_saved_t = 0;
-unsigned long nw           = 0;
 unsigned long last_wifi_check = 0;
 
 // for output to a remote server
@@ -459,59 +458,67 @@ void loop() {
   }
 
   // last log check TIMER/RATE 1
-  nw = millis();
-  if(nw - cfg.log_interval_1s > last_log_time_1s){
-    if(last_log_value_1s != 0 && last_log_time_1s != 0){
-      // 1000* as this is in millis()
-      // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
-      // 1 tick is 1dl, so counter is in x DeciLiter, so we do rate_adjust* for CNT too
-      rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_1s)/(double)(nw-last_log_time_1s);
+  if(millis() - last_log_time_1s > cfg.log_interval_1s){
+    if(last_log_time_1s == 0){
+      last_log_value_1s = counter.last_cnt;
+      last_log_time_1s  = millis();
     } else {
-      rate = 0.0;
-    }
-    last_log_value_1s = counter.last_cnt;
-    last_log_time_1s  = nw;
+      if(last_log_value_1s != 0){
+        // 1000* as this is in millis()
+        // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
+        // 1 tick is 1dl, so counter is in x DeciLiter, so we do rate_adjust* for CNT too
+        rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_1s)/(double)(millis()-last_log_time_1s);
+      } else {
+        rate = 0.0;
+      }
+      last_log_value_1s = counter.last_cnt;
+      last_log_time_1s  = millis();
 
-    memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%0.08f\r\nR1,%0.08f\r\n", cfg.rate_adjust*last_log_value_1s, rate);
+      memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
+      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%0.08f\r\nR1,%0.08f\r\n", cfg.rate_adjust*last_log_value_1s, rate);
 
-    // output over UART?
-    if(cfg.do_log)
-      Serial.print(outbuffer);
+      // output over UART?
+      if(cfg.do_log)
+        Serial.print(outbuffer);
 
-    // output over UDP?
-    if(valid_udp_host){
-      udp.beginPacket(udp_tgt, cfg.udp_port);
-      udp.write(outbuffer, h_strl);
-      udp.endPacket();
+      // output over UDP?
+      if(valid_udp_host){
+        udp.beginPacket(udp_tgt, cfg.udp_port);
+        udp.write(outbuffer, h_strl);
+        udp.endPacket();
+      }
     }
   }
 
   // last log check TIMER/RATE 2
-  nw = millis();
-  if(nw - cfg.log_interval_5m > last_log_time_5m){
-    if(last_log_value_5m != 0 && last_log_time_5m != 0){
+  if(millis() - last_log_time_5m > cfg.log_interval_5m){
+    if(last_log_value_5m == 0){
+      last_log_value_5m   = counter.last_cnt;
+      last_log_time_5m    = millis();
+    } else {
       // 1000* as this is in millis()
       // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
-      rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_5m)/(double)(nw-last_log_time_5m);
-    } else {
-      rate = 0.0;
-    }
-    last_log_value_5m   = counter.last_cnt;
-    last_log_time_5m    = nw;
+      if(last_log_value_5m != 0){
+        rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_5m)/(double)(millis()-last_log_time_5m);
+      } else {
+        rate = 0.0;
+      }
+      last_log_value_5m   = counter.last_cnt;
+      last_log_time_5m    = millis();
 
-    memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R2,%0.08f\r\n", rate);
+      memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
+      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R2,%0.08f\r\n", rate);
 
-    // output over UART?
-    if(cfg.do_log)
-      Serial.print(outbuffer);
+      // output over UART?
+      if(cfg.do_log)
+        Serial.print(outbuffer);
 
-    // output over UDP?
-    if(valid_udp_host){
-      udp.beginPacket(udp_tgt, cfg.udp_port);
-      udp.write(outbuffer, h_strl);
-      udp.endPacket();
+      // output over UDP?
+      if(valid_udp_host){
+        udp.beginPacket(udp_tgt, cfg.udp_port);
+        udp.write(outbuffer, h_strl);
+        udp.endPacket();
+      }
     }
   }
 
