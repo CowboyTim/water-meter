@@ -38,7 +38,7 @@
 char atscbu[128] = {""};
 SerialCommands ATSc(&Serial, atscbu, sizeof(atscbu), "\r\n", "\r\n");
 
-#define CFGVERSION 0x03 // switch between 0x01/0x02 to reinit the config struct change
+#define CFGVERSION 0x01 // switch between 0x01/0x02 to reinit the config struct change
 #define CFGINIT    0x72 // at boot init check flag
 #define CFG_EEPROM 0x00 
 
@@ -49,6 +49,7 @@ struct wm_cfg {
   uint8_t do_debug     = 0;
   uint8_t do_verbose   = 0;
   uint8_t do_log       = 0;
+  uint8_t persist_counter_reboot  = 0;
   double rate_adjust   = 0;
   short udp_port       = 0;
   char udp_host_ip[16] = {0};
@@ -235,6 +236,16 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+LOG_CNT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_log);
+  } else if(p = at_cmd_check("AT+COUNTER_SAVE?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.persist_counter_reboot);
+  } else if(p = at_cmd_check("AT+COUNTER_SAVE=1", atcmdline, cmd_len)){
+    cfg.persist_counter_reboot = 1;
+    EEPROM.put(CFG_EEPROM, cfg);
+    EEPROM.commit();
+  } else if(p = at_cmd_check("AT+COUNTER_SAVE=0", atcmdline, cmd_len)){
+    cfg.persist_counter_reboot = 0;
+    EEPROM.put(CFG_EEPROM, cfg);
+    EEPROM.commit();
   } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.rate_adjust);
   } else if(p = at_cmd_check("AT+RATE_FACTOR=", atcmdline, cmd_len)){
@@ -337,6 +348,7 @@ void setup() {
     cfg.log_interval_1s = 1000;
     cfg.log_interval_5m = 30000;
     cfg.rate_adjust     = 1.0;
+    cfg.persist_counter_reboot = 1;
     strcpy((char *)&cfg.ntp_host, (char *)DEFAULT_NTP_SERVER);
     // write
     EEPROM.put(CFG_EEPROM, cfg);
@@ -504,17 +516,19 @@ void loop() {
   }
 
   // save to EEPROM?
-  if(millis() - last_saved_t > 10000){
-    if(last_saved_v != last_log_value_1s){
-      #ifdef DEBUG
-      if(cfg.do_debug)
-        Serial.println(F("EEPROM save"));
-      #endif
-      last_saved_v = last_log_value_1s;
-      EEPROM.put(CFG_EEPROM+sizeof(cfg), counter);
-      EEPROM.commit();
+  if(cfg.persist_counter_reboot){
+    if(millis() - last_saved_t > 10000){
+      if(last_saved_v != last_log_value_1s){
+        #ifdef DEBUG
+        if(cfg.do_debug)
+          Serial.println(F("EEPROM save"));
+        #endif
+        last_saved_v = last_log_value_1s;
+        EEPROM.put(CFG_EEPROM+sizeof(cfg), counter);
+        EEPROM.commit();
+      }
+      last_saved_t = millis();
     }
-    last_saved_t = millis();
   }
 
   // just wifi check
