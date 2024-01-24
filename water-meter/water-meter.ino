@@ -489,7 +489,7 @@ void loop() {
       last_log_time_1s  = millis();
 
       memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%0.08f\r\nR1,%0.08f\r\n", cfg.rate_adjust*last_log_value_1s, rate);
+      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%d\r\nR1,%0.08f\r\n", last_log_value_1s, rate);
 
       // output over UART?
       if(cfg.do_log)
