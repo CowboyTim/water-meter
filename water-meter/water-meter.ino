@@ -380,6 +380,8 @@ void loop() {
   // any new AT command? on USB uart
   ATSc.ReadSerial();
 
+  delay(50);
+
   // check PIN value
   v = digitalRead(QRD1114_PIN);
   if(v != last_v){
@@ -391,7 +393,7 @@ void loop() {
       Serial.println(last_v);
     }
     #endif
-    if(v < last_v)
+    if(v > last_v)
       counter.current_counter++;
     last_v = v;
   }
