@@ -235,6 +235,8 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.commit();
   } else if(p = at_cmd_check("AT+LOG_CNT?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_log);
+  } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.rate_adjust);
   } else if(p = at_cmd_check("AT+RATE_FACTOR=", atcmdline, cmd_len)){
     errno = 0;
     double r = (double)strtod(p, NULL);
@@ -268,8 +270,6 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     setup_udp();
-  } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
-    s->GetSerial()->println(cfg.rate_adjust);
   } else if(p = at_cmd_check("AT+ERASE", atcmdline, cmd_len)){
     memset(&cfg, 0, sizeof(cfg));
     EEPROM.put(CFG_EEPROM, cfg);
