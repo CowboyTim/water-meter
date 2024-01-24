@@ -38,7 +38,7 @@
 char atscbu[128] = {""};
 SerialCommands ATSc(&Serial, atscbu, sizeof(atscbu), "\r\n", "\r\n");
 
-#define CFGVERSION 0x01 // switch between 0x01/0x02 to reinit the config struct change
+#define CFGVERSION 0x03 // switch between 0x01/0x02 to reinit the config struct change
 #define CFGINIT    0x72 // at boot init check flag
 #define CFG_EEPROM 0x00 
 
@@ -52,7 +52,8 @@ struct wm_cfg {
   double rate_adjust   = 0;
   short udp_port       = 0;
   char udp_host_ip[16] = {0};
-  unsigned int log_interval = 0;
+  unsigned int log_interval_1s = 0;
+  unsigned int log_interval_5m = 0;
   char wifi_ssid[32]   = {0};   // max 31 + 1
   char wifi_pass[64]   = {0};   // nax 63 + 1
   char ntp_host[64]    = {0};   // max hostname + 1
@@ -72,19 +73,24 @@ double rate = 0.0;
 /* state flags */
 uint8_t ntp_is_synced      = 1;
 uint8_t logged_wifi_status = 0;
-unsigned int last_log_value= 0;
+unsigned int last_log_value_1s = 0;
+unsigned int last_log_value_5m = 0;
 unsigned int last_saved_v  = 0;
 unsigned long last_chg     = 0;
 unsigned int v = 0, last_v = 0;
-unsigned long last_log_time= 0;
+unsigned long last_log_time_1s = 0;
+unsigned long last_log_time_5m = 0;
 unsigned long last_saved_t = 0;
 unsigned long nw           = 0;
 unsigned long last_wifi_check = 0;
 
 // for output to a remote server
+#define OUTBUFFER_SIZE  128
 WiFiUDP udp;
 IPAddress udp_tgt;
 uint8_t valid_udp_host = 0;
+char outbuffer[OUTBUFFER_SIZE] = {0};
+int h_strl = 0;
 
 void(* resetFunc)(void) = 0;
 
@@ -295,11 +301,12 @@ void setup() {
     // clear
     memset(&cfg, 0, sizeof(cfg));
     // reinit
-    cfg.initialized = CFGINIT;
-    cfg.version     = CFGVERSION;
-    cfg.do_log      = 1;
-    cfg.log_interval= 1000;
-    cfg.rate_adjust = 1.0;
+    cfg.initialized     = CFGINIT;
+    cfg.version         = CFGVERSION;
+    cfg.do_log          = 1;
+    cfg.log_interval_1s = 1000;
+    cfg.log_interval_5m = 30000;
+    cfg.rate_adjust     = 1.0;
     strcpy((char *)&cfg.ntp_host, (char *)DEFAULT_NTP_SERVER);
     // write
     EEPROM.put(CFG_EEPROM, cfg);
@@ -409,40 +416,71 @@ void loop() {
       digitalWrite(LED, LOW);
   }
 
-  // last log check
+  // last log check TIMER/RATE 1
   nw = millis();
-  if(nw - cfg.log_interval > last_log_time){
-    if(last_log_value != 0 && last_log_time != 0){
-      rate = cfg.rate_adjust*(double)(counter.last_cnt-last_log_value)/(double)(nw-last_log_time);
+  if(nw - cfg.log_interval_1s > last_log_time_1s){
+    if(last_log_value_1s != 0 && last_log_time_1s != 0){
+      // 1000* as this is in millis()
+      // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
+      // 1 tick is 1dl, so counter is in x DeciLiter, so we do rate_adjust* for CNT too
+      rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_1s)/(double)(nw-last_log_time_1s);
     } else {
       rate = 0.0;
     }
-    last_log_value = counter.last_cnt;
-    last_log_time  = nw;
+    last_log_value_1s = counter.last_cnt;
+    last_log_time_1s  = nw;
 
-    char b[50] = {0};
-    int h_strl = snprintf((char *)&b, 50, "C,%d\r\nR,%0.04f\r\n", counter.last_cnt, rate);
+    memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
+    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%0.08f\r\nR1S,%0.08f\r\n", cfg.rate_adjust*last_log_value_1s, rate);
 
     // output over UART?
     if(cfg.do_log)
-      Serial.print(b);
+      Serial.print(outbuffer);
 
     // output over UDP?
     if(valid_udp_host){
       udp.beginPacket(udp_tgt, cfg.udp_port);
-      udp.write(b, h_strl);
+      udp.write(outbuffer, h_strl);
+      udp.endPacket();
+    }
+  }
+
+  // last log check TIMER/RATE 2
+  nw = millis();
+  if(nw - cfg.log_interval_5m > last_log_time_5m){
+    if(last_log_value_5m != 0 && last_log_time_5m != 0){
+      // 1000* as this is in millis()
+      // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
+      rate = 1000*cfg.rate_adjust*(double)(counter.last_cnt-last_log_value_5m)/(double)(nw-last_log_time_5m);
+    } else {
+      rate = 0.0;
+    }
+    last_log_value_5m   = counter.last_cnt;
+    last_log_time_5m    = nw;
+
+    memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
+    h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R5M,%0.08f\r\n", rate);
+
+    // output over UART?
+    if(cfg.do_log)
+      Serial.print(outbuffer);
+
+    // output over UDP?
+    if(valid_udp_host){
+      udp.beginPacket(udp_tgt, cfg.udp_port);
+      udp.write(outbuffer, h_strl);
       udp.endPacket();
     }
   }
 
   // save to EEPROM?
   if(millis() - last_saved_t > 10000){
-    if(last_saved_v != last_log_value){
+    if(last_saved_v != last_log_value_1s){
       #ifdef DEBUG
       if(cfg.do_debug)
         Serial.println(F("EEPROM save"));
       #endif
-      last_saved_v = last_log_value;
+      last_saved_v = last_log_value_1s;
       EEPROM.put(CFG_EEPROM+sizeof(cfg), counter);
       EEPROM.commit();
     }
