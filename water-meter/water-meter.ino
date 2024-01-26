@@ -467,7 +467,7 @@ void loop() {
     last_cnt = counter.current_counter;
     last_chg = millis();
   } else {
-    if(millis() - last_chg > 30)
+    if(millis() - last_chg > 50)
       digitalWrite(LED, LOW);
   }
 
