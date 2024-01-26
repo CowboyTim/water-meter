@@ -479,8 +479,7 @@ void loop() {
     } else {
       if(last_log_value_1s != 0){
         // 1000* as this is in millis()
-        // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
-        // 1 tick is 1dl, so counter is in x DeciLiter, so we do rate_adjust* for CNT too
+        // rate_adjust is 1, as 1 tick is 1L
         rate = 1000*cfg.rate_adjust*(double)(counter.current_counter-last_log_value_1s)/(double)(millis()-last_log_time_1s);
       } else {
         rate = 0.0;
@@ -510,8 +509,7 @@ void loop() {
       last_log_value_5m   = counter.current_counter;
       last_log_time_5m    = millis();
     } else {
-      // 1000* as this is in millis()
-      // rate_adjust is 0.1, as 1 tick is 1dl, which is 1/10 Liter
+      // see 1s
       if(last_log_value_5m != 0){
         rate = 1000*cfg.rate_adjust*(double)(counter.current_counter-last_log_value_5m)/(double)(millis()-last_log_time_5m);
       } else {
