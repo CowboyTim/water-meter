@@ -47,9 +47,11 @@ struct wm_cfg {
   uint8_t initialized  = 0;
   uint8_t version      = 0;
   uint8_t do_debug     = 0;
+  uint8_t main_loop_delay = 0;
   uint8_t do_verbose   = 0;
   uint8_t do_log       = 0;
   uint8_t persist_counter_reboot  = 0;
+  unsigned long persist_interval  = 0;
   double rate_adjust   = 0;
   short udp_port       = 0;
   char udp_host_ip[16] = {0};
@@ -83,6 +85,12 @@ unsigned long last_log_time_1s = 0;
 unsigned long last_log_time_5m = 0;
 unsigned long last_saved_t = 0;
 unsigned long last_wifi_check = 0;
+
+#define UNIT               0.5
+#define LAST_STATE_UNKNOWN 2
+#define LAST_STATE_UP      1
+#define LAST_STATE_DOWN    0
+uint8_t last_was_up = LAST_STATE_UNKNOWN;
 
 // for output to a remote server
 #define OUTBUFFER_SIZE  128
@@ -199,13 +207,20 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     return;
   } else if(p = at_cmd_check("AT+CNT=", atcmdline, cmd_len)){
     errno = 0;
-    unsigned int new_c = strtoul(p, NULL, 10);
+    double new_d = strtod(p, NULL);
     if(errno != 0){
       s->GetSerial()->println(F("invalid double"));
       s->GetSerial()->println(F("ERROR"));
       return;
     }
+    unsigned int new_c = (unsigned int)floor(new_d*(1/UNIT));
     if(new_c != counter.current_counter){
+      #ifdef VERBOSE
+      if(cfg.do_verbose){
+        Serial.print(F("set new counter of 0.5L to: "));
+        Serial.println(new_c);
+      }
+      #endif
       counter.current_counter = new_c;
       // disable next rate calculation, it'll be pointless
       last_log_time_1s  = 0;
@@ -214,7 +229,7 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
       last_log_value_5m = 0;
     }
   } else if(p = at_cmd_check("AT+CNT?", atcmdline, cmd_len)){
-    s->GetSerial()->println(counter.current_counter);
+    s->GetSerial()->println(((double)counter.current_counter)*UNIT);
   #ifdef DEBUG
   } else if(p = at_cmd_check("AT+DEBUG=1", atcmdline, cmd_len)){
     cfg.do_debug = 1;
@@ -259,6 +274,21 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     cfg.persist_counter_reboot = 0;
     EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
+  } else if(p = at_cmd_check("AT+COUNTER_SAVE_INTERVAL?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.persist_interval);
+  } else if(p = at_cmd_check("AT+COUNTER_SAVE_INTERVAL=", atcmdline, cmd_len)){
+    errno = 0;
+    unsigned int l_int = (double)strtoul(p, NULL, 10);
+    if(errno != 0){
+      s->GetSerial()->println(F("invalid integer"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    if(l_int != cfg.persist_interval){
+      cfg.persist_interval = l_int;
+      EEPROM.put(CFG_EEPROM, cfg);
+      EEPROM.commit();
+    }
   } else if(p = at_cmd_check("AT+RATE_FACTOR?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.rate_adjust);
   } else if(p = at_cmd_check("AT+RATE_FACTOR=", atcmdline, cmd_len)){
@@ -324,6 +354,21 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
     EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
     setup_udp();
+  } else if(p = at_cmd_check("AT+LOOP_DELAY=", atcmdline, cmd_len)){
+    errno = 0;
+    unsigned int new_c = strtoul(p, NULL, 10);
+    if(errno != 0){
+      s->GetSerial()->println(F("invalid integer"));
+      s->GetSerial()->println(F("ERROR"));
+      return;
+    }
+    if(new_c != cfg.main_loop_delay){
+      cfg.main_loop_delay = new_c;
+      EEPROM.put(CFG_EEPROM, cfg);
+      EEPROM.commit();
+    }
+  } else if(p = at_cmd_check("AT+LOOP_DELAY?", atcmdline, cmd_len)){
+    s->GetSerial()->println(cfg.main_loop_delay);
   } else if(p = at_cmd_check("AT+ERASE", atcmdline, cmd_len)){
     memset(&cfg, 0, sizeof(cfg));
     EEPROM.put(CFG_EEPROM, cfg);
@@ -358,10 +403,12 @@ void setup() {
     cfg.initialized     = CFGINIT;
     cfg.version         = CFGVERSION;
     cfg.do_log          = 1;
+    cfg.main_loop_delay = 100;
     cfg.log_interval_1s = 1000;
     cfg.log_interval_5m = 30000;
     cfg.rate_adjust     = 1.0;
     cfg.persist_counter_reboot = 1;
+    cfg.persist_interval       = 3600000;
     strcpy((char *)&cfg.ntp_host, (char *)DEFAULT_NTP_SERVER);
     // write
     EEPROM.put(CFG_EEPROM, cfg);
@@ -442,7 +489,7 @@ void loop() {
   // any new AT command? on USB uart
   ATSc.ReadSerial();
 
-  delay(50);
+  delay(cfg.main_loop_delay);
 
   // check PIN value
   v = digitalRead(QRD1114_PIN);
@@ -455,8 +502,17 @@ void loop() {
       Serial.println(last_v);
     }
     #endif
-    if(v > last_v)
+
+    // up: +1/2 counter value
+    if(v > last_v && (last_was_up == LAST_STATE_UP || last_was_up == LAST_STATE_UNKNOWN)){
+      last_was_up = LAST_STATE_DOWN;
       counter.current_counter++;
+    }
+    // down: +1/2 counter value
+    if(v < last_v && (last_was_up == LAST_STATE_DOWN || last_was_up == LAST_STATE_UNKNOWN)){
+      last_was_up = LAST_STATE_UP;
+      counter.current_counter++;
+    }
     last_v = v;
   }
 
@@ -479,8 +535,8 @@ void loop() {
     } else {
       if(last_log_value_1s != 0){
         // 1000* as this is in millis()
-        // rate_adjust is 1, as 1 tick is 1L
-        rate = 1000*cfg.rate_adjust*(double)(counter.current_counter-last_log_value_1s)/(double)(millis()-last_log_time_1s);
+        // rate_adjust is 1, but 1/2 as 1 tick is 1/2L
+        rate = 1000*cfg.rate_adjust*UNIT*(double)(counter.current_counter-last_log_value_1s)/(double)(millis()-last_log_time_1s);
       } else {
         rate = 0.0;
       }
@@ -488,7 +544,7 @@ void loop() {
       last_log_time_1s  = millis();
 
       memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%d\r\nR1,%0.08f\r\n", last_log_value_1s, rate);
+      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "C,%.1f\r\nR1,%.8f\r\n", (double)(last_log_value_1s)*UNIT, rate);
 
       // output over UART?
       if(cfg.do_log)
@@ -511,7 +567,7 @@ void loop() {
     } else {
       // see 1s
       if(last_log_value_5m != 0){
-        rate = 1000*cfg.rate_adjust*(double)(counter.current_counter-last_log_value_5m)/(double)(millis()-last_log_time_5m);
+        rate = 1000*cfg.rate_adjust*UNIT*(double)(counter.current_counter-last_log_value_5m)/(double)(millis()-last_log_time_5m);
       } else {
         rate = 0.0;
       }
@@ -519,7 +575,7 @@ void loop() {
       last_log_time_5m    = millis();
 
       memset((char*)&outbuffer, 0, OUTBUFFER_SIZE);
-      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R2,%0.08f\r\n", rate);
+      h_strl = snprintf((char *)&outbuffer, OUTBUFFER_SIZE, "R2,%.8f\r\n", rate);
 
       // output over UART?
       if(cfg.do_log)
@@ -536,13 +592,13 @@ void loop() {
 
   // save to EEPROM?
   if(cfg.persist_counter_reboot){
-    if(millis() - last_saved_t > 10000){
-      if(last_saved_v != last_log_value_1s){
+    if(millis() - last_saved_t > cfg.persist_interval){
+      if(last_saved_v != counter.current_counter){
         #ifdef DEBUG
         if(cfg.do_debug)
           Serial.println(F("EEPROM save"));
         #endif
-        last_saved_v = last_log_value_1s;
+        last_saved_v = counter.current_counter;
         EEPROM.put(CFG_EEPROM+sizeof(cfg), counter);
         EEPROM.commit();
       }
