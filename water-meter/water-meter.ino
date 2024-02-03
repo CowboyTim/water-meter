@@ -47,7 +47,7 @@ struct wm_cfg {
   uint8_t initialized  = 0;
   uint8_t version      = 0;
   uint8_t do_debug     = 0;
-  uint8_t main_loop_delay = 0;
+  uint16_t main_loop_delay = 0;
   uint8_t do_verbose   = 0;
   uint8_t do_log       = 0;
   uint8_t persist_counter_reboot  = 0;
@@ -254,15 +254,15 @@ void at_cmd_handler(SerialCommands* s, const char* atcmdline){
   } else if(p = at_cmd_check("AT+VERBOSE?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_verbose);
   #endif
-  } else if(p = at_cmd_check("AT+LOG_CNT=1", atcmdline, cmd_len)){
+  } else if(p = at_cmd_check("AT+LOG_UART=1", atcmdline, cmd_len)){
     cfg.do_log = 1;
     EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
-  } else if(p = at_cmd_check("AT+LOG_CNT=0", atcmdline, cmd_len)){
+  } else if(p = at_cmd_check("AT+LOG_UART=0", atcmdline, cmd_len)){
     cfg.do_log = 0;
     EEPROM.put(CFG_EEPROM, cfg);
     EEPROM.commit();
-  } else if(p = at_cmd_check("AT+LOG_CNT?", atcmdline, cmd_len)){
+  } else if(p = at_cmd_check("AT+LOG_UART?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.do_log);
   } else if(p = at_cmd_check("AT+COUNTER_SAVE?", atcmdline, cmd_len)){
     s->GetSerial()->println(cfg.persist_counter_reboot);
