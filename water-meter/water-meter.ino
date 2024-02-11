@@ -28,7 +28,7 @@
 #endif
 
 /* ESP yield */
-#if ARDUINO_ARCH_ESP8266 || ARDUINO_ARCH_ESP32
+#if defined(ARDUINO_ARCH_ESP8266) || defined(ARDUINO_ARCH_ESP32)
  #define doYIELD yield();
 #else
  #define doYIELD
